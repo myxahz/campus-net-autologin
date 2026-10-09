@@ -1,0 +1,49 @@
+name: Bug 报告
+description: 报告一个可复现的问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！提交前请先搜索是否已有相同 Issue。
+
+        ⚠️ 本项目**仅适配北京交通大学**校园网，且**仅支持 Windows**。其它学校、其它系统不在支持范围内。
+        ⚠️ 请不要贴出自己的账号、密码、设备 MAC 或完整登录链接。
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 问题描述
+      description: 发生了什么？期望是什么？
+      placeholder: 实际行为……；期望行为……
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 执行 ...
+        2. 看到 ...
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: 运行环境
+      description: Windows 版本 / Python 版本 / 浏览器及版本
+      placeholder: 如 Windows 11 23H2 / Python 3.12 / Chrome 130
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: 看门狗日志（%TEMP%\bjtu-net-autologin.log）或扩展控制台 [BJTU-*] 日志。请自行隐去 IP 与 MAC。
+      render: shell
+    validations:
+      required: true

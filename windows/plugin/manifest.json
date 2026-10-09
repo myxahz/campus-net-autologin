@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "北交校园网自动登录助手",
+  "version": "1.0.0",
+  "description": "读取本机看门狗状态，掉线后自动打开登录页并点击「登录」，未成功则刷新重试。密码仅由浏览器自动填充，扩展不读取明文。",
+  "permissions": ["alarms", "tabs"],
+  "host_permissions": [
+    "*://login.bjtu.edu.cn/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://login.bjtu.edu.cn/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}

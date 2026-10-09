@@ -1,0 +1,16 @@
+* text=auto eol=lf
+
+*.png  binary
+*.jpg  binary
+*.gif  binary
+*.ico  binary
+*.zip  binary
+*.exe  binary
+
+*.py   text diff=python
+*.js   text
+*.json text
+*.md   text diff=markdown
+
+.github/   export-ignore
+.gitignore export-ignore

@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python 语法检查
+        run: python -m py_compile watchdog.py
+
+      - name: JSON 校验
+        run: |
+          python - <<'PY'
+          import json
+          for f in ("config.json", "windows/plugin/manifest.json"):
+              with open(f, encoding="utf-8") as fh:
+                  json.load(fh)
+              print("OK", f)
+          PY
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: JS 语法检查
+        run: |
+          node --check windows/plugin/background.js
+          node --check windows/plugin/content.js
+
+      - name: 启动器纯 ASCII 检查
+        run: |
+          python - <<'PY'
+          import pathlib
+          import sys
+
+          # VBScript on a Chinese Windows decodes the file as GBK; a UTF-8
+          # source with non-ASCII bytes then fails with 800A0400 缺少语句.
+          p = pathlib.Path("windows/start-watchdog.vbs")
+          data = p.read_bytes()
+          bad = [i for i, b in enumerate(data) if b > 127]
+          if bad:
+              print("%s has non-ASCII bytes at %s -> would break VBScript" % (p, bad[:5]))
+              sys.exit(1)
+          print("clean:", p, len(data), "bytes")
+          PY
+
+      - name: 敏感信息粗筛
+        run: |
+          python - <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          # Documented placeholders: allowed to look like a MAC.
+          ALLOW = {"AABB-CCDD-EEFF", "AA11-BB22-CC33"}
+
+          winpath = re.compile(r"[A-Za-z]:[\\/]+Users[\\/]+", re.I)
+          # Two MAC shapes: four-hex groups (what get_mac_dash() emits) and
+          # the two-hex-pair form used by some network tools.
+          mac = re.compile(
+              r"\b(?:[0-9A-Fa-f]{4}-){2}[0-9A-Fa-f]{4}\b"
+              r"|\b(?:[0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2}\b"
+          )
+          # A personal campus IP 10.60.x.y, but never the subnet 10.60.0.0/16.
+          campip = re.compile(r"\b10\.60\.(?!0\.0\b)\d{1,3}\.\d{1,3}\b")
+          exts = {".py", ".js", ".json", ".vbs", ".md", ".yml", ".yaml", ".txt"}
+          bad = []
+          for p in pathlib.Path(".").rglob("*"):
+              if not p.is_file() or p.suffix.lower() not in exts:
+                  continue
+              if ".git" in p.parts:
+                  continue
+              for i, line in enumerate(
+                  p.read_text(encoding="utf-8", errors="ignore").splitlines(), 1
+              ):
+                  if winpath.search(line):
+                      bad.append("%s:%d Windows 用户路径" % (p, i))
+                  for m in mac.finditer(line):
+                      token = m.group(0)
+                      if token in ALLOW:
+                          continue
+                      # require at least one hex letter so that pure-digit
+                      # timestamps (2026-09-30-...) do not false-positive.
+                      if re.search(r"[A-Fa-f]", token):
+                          bad.append("%s:%d 疑似设备 MAC %s" % (p, i, token))
+                  hit = campip.search(line)
+                  if hit:
+                      bad.append("%s:%d 疑似个人校园网 IP %s" % (p, i, hit.group(0)))
+          if bad:
+              print("\n".join(bad))
+              sys.exit(1)
+          print("clean")
+          PY

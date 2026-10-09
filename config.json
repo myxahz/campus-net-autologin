@@ -1,0 +1,21 @@
+{
+  "host": "login.bjtu.edu.cn",
+  "login_url_template": "https://login.bjtu.edu.cn/a79.htm?userip={userip}&usermac={usermac}&nas%2dip={nas_ip_encoded}",
+  "login_url_static": "",
+  "usermac": "",
+  "nas_ip_encoded": "4%2e4%2e110%2e110",
+  "campus_subnet": "10.60.0.0/16",
+  "probe_urls": [
+    { "url": "http://connect.rom.miui.com/generate_204", "expect_204": true },
+    { "url": "http://www.baidu.com", "expect_204": false }
+  ],
+  "hijack_keywords": ["login.bjtu.edu.cn", "a79.htm", "注销页"],
+  "unknown_streak_limit": 3,
+  "poll_interval_sec": 30,
+  "local_port": 5180,
+  "http_timeout_sec": 5,
+  "auto_open_login_page": true,
+  "login_open_interval_sec": 180,
+  "login_open_max_per_outage": 3,
+  "login_tabs_ttl_sec": 300
+}
