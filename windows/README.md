@@ -83,14 +83,14 @@
 |------|----------------|
 | 双击启动器毫无反应 | 多半是它被复制出了项目目录，重新用**快捷方式**的方式做一遍 |
 | 插件控制台提示 `watchdog status unavailable` | 看门狗没在跑，双击 `windows\start-watchdog.vbs` 或重启电脑 |
-| 打开了登录页但不点「登录」 | 日志里搜 `[plugin] cs:`：`form never appeared` = 登录表单没渲染出来（页面迟迟拿不到密码框）；`login button NOT FOUND` = 按钮没认出来，把后面 `candidates: [...]` 一并附在 Issue 里；`still in the background after 6000ms -> not clicking` = 这次加载一直待在后台标签里，插件**故意不点**（后台加载等不到自动填充，点下去只会白记一次失败登录），把该标签切到前台即可。注意现在是第 3 秒**无条件点击**，不再因"框空"跳过 |
-| 页面弹「请输入账号！」但框里明明有账号 | 那是**过期的提示**：点击那一刻框还空着（日志 `autofill ready: false`），浏览器随后才把账号密码填上，提示框不会自己消失。同一 `[Lxxxx]` 的日志行能还原先后顺序 |
+| 打开了登录页但不点「登录」 | 日志里搜 `[plugin] cs:`：`form never appeared` = 登录表单没渲染出来（页面迟迟拿不到密码框）；`login button NOT FOUND` = 按钮没认出来，把后面 `candidates: [...]` 一并附在 Issue 里；`still in the background after 6000ms -> not clicking` = 这次加载一直待在后台标签里，插件**故意不点**（后台加载等不到自动填充，点下去只会白记一次失败登录），把该标签切到前台即可；`autofill not ready after 5000ms -> NOT clicking` = 浏览器**始终没自动填充**，插件选择刷新而不空点（根因是浏览器没保存该站点密码） |
+| 页面弹「请输入账号！」但框里明明有账号 | 当前版本**不再出现**：这句是门户 `checkForm()` 在 `input[name=DDDDD]` 为空时弹的，插件现已改为"填充后才点"。若在老版本看到，那是**过期的提示**（点击那一刻框还空着，浏览器随后才填上），同一 `[Lxxxx]` 的日志行能还原先后顺序 |
 | 日志里 `login tabs found: N - keeping the newest (id ...), closing N-1 stale one(s)` | 浏览器里同时开着多枚登录页，插件只留最新的一枚、关掉其余（多枚并存时每个都在跑自己的刷新回路，只会空转刷屏）。正常工作，无需处理 |
-| 日志里 `still in the background after 6000ms -> not clicking` / `not logged in after click, but the tab is in the background -> no refresh` | 后台标签里插件不点击、也不刷新。这是有意的：全日志里没有一次后台加载被自动填充过，点击只会换来网关的「请输入账号」和一次失败登录。把标签切到前台，插件会从那一刻重新起算 3 秒再点 |
+| 日志里 `still in the background after 6000ms -> not clicking` / `no login yet, but the tab is in the background -> no refresh` | 后台标签里插件不点击、也不刷新。这是有意的：全日志里没有一次后台加载被自动填充过，点击只会换来网关的「请输入账号」和一次失败登录。把标签切到前台，插件会从那一刻重新起算 3 秒再点 |
 | 点了「注销」后一直不自动登录 | 先看 `/status` 的 `need_login` 是否为 `true`：是 → 往下游查，日志里看门狗应有 `opened login page in the default browser`、插件应有 `trigger login` / `focused window` / `sent ENSURE_LOGIN`；始终 `false` → 是判定问题，附上 `reason` 原文 |
 | 刚改过扩展的源码，行为没变化 | 扩展必须**重新加载**才生效：`chrome://extensions` → 本扩展 → 点「重新加载」（↻） |
-| 没看到日志里 `clicking 登录 at ~3s (autofill ready: true)` | 浏览器没自动填密码（或填得比 3 秒晚）：确认已保存北交校园网的账号密码（手动双击登录页快捷方式能自动填上就说明有）。内容脚本持有"第 3 秒点一次、1 秒查状态、没登录就刷新"的回路，最多 6 次；每次刷新都是一次新的加载，最可能被填充的就是 reload 这次。那行还会带 `anchor_delay_ms`：大于 0 说明这次加载先待在后台、被提到前台后才起算 3 秒 |
-| 日志里没有 `kept it in front` 也没有 `refresh & retry n / 6` | 跑的是**旧版脚本**。`content.js` 每次页面加载都从磁盘重读，`background.js` 却要手动重载才会换，所以会出现"新内容脚本 + 旧后台"的混合态。按 `chrome://extensions` 点「重新加载」（↻）即可。重载后日志里应能看到内容脚本的 `refresh & retry n / 6` 与后台的 `kept it in front` |
+| 没看到日志里 `autofill ready -> clicking 登录` | 浏览器没自动填密码（或填得太晚）：确认已保存北交校园网的账号密码（手动双击登录页快捷方式能自动填上就说明有）。内容脚本持有"等填充 → 点击 → 1 秒查状态 → 没登录就刷新"的回路，最多 6 次；每次刷新都是一次新的加载，最可能被填充的就是 reload 这次。那行还会带 `anchor_delay_ms`：大于 0 说明这次加载先待在后台、被提到前台后才起算 3 秒 |
+| 日志里没有 `kept it in front` 也没有 `no login yet -> refresh & retry n / 6` | 跑的是**旧版脚本**。`content.js` 每次页面加载都从磁盘重读，`background.js` 却要手动重载才会换，所以会出现"新内容脚本 + 旧后台"的混合态。按 `chrome://extensions` 点「重新加载」（↻）即可。重载后日志里应能看到内容脚本的 `no login yet -> refresh & retry n / 6` 与后台的 `kept it in front` |
 | 掉线时浏览器没自动弹出登录页 | `/status` 看 `auto_open_count` / `last_auto_open` 有没有涨；日志搜 `opened login page` 或 `auto-open failed` |
 | 掉线时反复弹登录页标签 | 把 `config.json` 的 `login_open_interval_sec` 调大（默认 180 秒）；每次掉线最多开 3 次（`login_open_max_per_outage`），到上限后不再弹 |
 | 明明没登录，却显示"在线"、于是不点登录 | 请确认用的是最新版本（新版会嗅探网页内容，不会被"回你一个登录页"的假在线骗过） |

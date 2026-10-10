@@ -32,6 +32,21 @@
 // but its 3 s clock is anchored at "the page is in front", and a document that
 // is never brought to the front neither clicks nor refreshes.
 //
+// History note (2026-10-10) - THE BLIND CLICK IS GONE. This is the fix for the
+// user's "账号已经填好了却提示请输入账号!、点了也不登录" report. Reading the
+// portal's own code settles it: a40.js checkForm() does
+//     var DDDDD = $(form).find('input[name=DDDDD]').val();
+//     var upass = $(form).find('input[name=upass]').val();
+//     if (form.name == 'f1') {
+//       if (DDDDD == "") { _alert(lang('请输入账号！')); return false; }
+// i.e. the portal validates CLIENT-SIDE against the DOM value (that _alert IS
+// the dark bubble in the screenshot) and aborts before a single byte is sent.
+// So a blind click that lands before Chromium commits the saved password ALWAYS
+// shows 请输入账号! and never logs in - and each one is recorded against the
+// account as a failed attempt. The click is now gated on the boxes actually
+// carrying a value (waitFilled); a load that never fills is reloaded, not
+// clicked, because a reload is the load that tends to get autofilled.
+//
 // The refresh is also the load that gets filled: the 13:24-13:27 run narrowed
 // the only per-load difference to nav.type ("reload" filled, "navigate" did not,
 // otherwise byte-identical audit, n=1, unproven). Whether or not that holds, the
@@ -46,12 +61,18 @@
 (function () {
   const RETRY_KEY = "bjtu_login_retry"; // how many refreshes this loop has done
   const MAX_RELOAD = 6;        // safety cap so a truly-dead gateway cannot loop forever
-  // User's timing (standing rule, 2026-10-01): open the login page -> at 3 s
-  // click 登录 once -> 1 s later check the login status -> if not logged in,
-  // refresh -> 3 s after the refresh click again. The password is filled by the
-  // browser itself; this script only CLICKS. Do not touch credentials.
-  const CLICK_AT_MS = 3000;    // click 登录 this long after the page load
+  // User's timing, revised 2026-10-10: open the login page -> wait for the
+  // browser to autofill the saved account/password -> click 登录 -> 1 s later
+  // check the login status -> if not logged in, refresh and try again. The 3 s
+  // mark is now only a FLOOR for the click (never click sooner than that), not a
+  // mandate to click an empty form. The password is filled by the browser
+  // itself; this script only CLICKS. Do not touch credentials.
+  const CLICK_AT_MS = 3000;    // EARLIEST click time, measured from the anchor
   const CHECK_AT_MS = 1000;    // check login status this long after the click
+  // After the 3 s floor, how long to keep waiting for Chromium's autofill before
+  // giving up on THIS load. The fill is bimodal (it lands within ~5 s or not at
+  // all), so waiting longer is pointless - reload instead of clicking blind.
+  const FILL_GRACE_MS = 5000;
   // Captured once: was this page load already in the background? If so, autofill
   // for this document is a lost cause and the log should say so up front.
   const LOADED_HIDDEN = document.visibilityState === "hidden";
@@ -145,29 +166,41 @@
   }
 
   function getCreds() {
+    const pickVisible = (list) => {
+      for (const el of list) if (isVisible(el)) return el;
+      return null;
+    };
     const all = document.querySelectorAll('input[type="password"]');
-    // Prefer a VISIBLE password box. A portal page may carry several password
-    // inputs (hidden submit templates, a second form): picking the first one in
-    // DOM order can mean watching a field Chromium will never fill, and then
-    // reporting "autofill never arrived" forever.
-    let pwd = null;
-    for (const el of all) {
-      if (isVisible(el)) { pwd = el; break; }
+    // The a79.htm page literally declares authuserfield='DDDDD' and
+    // authpassfield='upass', and the portal's own checkForm() reads exactly
+    // input[name=DDDDD] / input[name=upass]. So look those names up FIRST: it
+    // makes identification exact and keeps our fill check aligned with the two
+    // fields the portal validates. Fall back to the generic heuristics only when
+    // the names are absent (a different portal build).
+    let pwd = document.querySelector('input[name="upass"]');
+    if (pwd && !isVisible(pwd)) pwd = null;
+    if (!pwd) {
+      // Prefer a VISIBLE password box. A portal page may carry several password
+      // inputs (hidden submit templates, a second form): picking the first one
+      // in DOM order can mean watching a field Chromium will never fill, and
+      // then reporting "autofill never arrived" forever.
+      pwd = pickVisible(all);
     }
     if (!pwd && all.length) pwd = all[0]; // fall back so the log can describe it
     if (!pwd) return { pwd: null, user: null };
     const scope = pwd.form || document;
-    // Same reasoning for the username: a hidden template input must not be
-    // mistaken for the account field.
-    const cands = scope.querySelectorAll(
-      'input[type="text"], input[type="email"], input[type="tel"], ' +
-      'input[type="number"], input:not([type])'
-    );
-    let user = null;
-    for (const el of cands) {
-      if (isVisible(el)) { user = el; break; }
+    let user = scope.querySelector('input[name="DDDDD"]');
+    if (user && !isVisible(user)) user = null;
+    if (!user) {
+      // Same reasoning for the username: a hidden template input must not be
+      // mistaken for the account field.
+      const cands = scope.querySelectorAll(
+        'input[type="text"], input[type="email"], input[type="tel"], ' +
+        'input[type="number"], input:not([type])'
+      );
+      user = pickVisible(cands);
+      if (!user && cands.length) user = cands[0];
     }
-    if (!user && cands.length) user = cands[0];
     return { pwd: pwd, user: user };
   }
 
@@ -547,42 +580,58 @@
         return;
       }
 
-      const { pwd, user } = getCreds();
-      const filled = !!(pwd && pwd.value && (!user || user.value));
-      // User's standing rule (2026-10-01, explicit): at 3 s, click 登录
-      // UNCONDITIONALLY — even if the box is (still) empty. The browser is
-      // expected to have filled it by now; this is a deliberate blind click.
-      log("clicking 登录 at ~3s (autofill ready:", filled,
-          "| anchor_delay_ms:", Math.max(0, anchorAt - LOAD_START), ")");
-      await clickLogin(btn);
+      // ---- fill gate -------------------------------------------------------
+      // The portal validates client-side (a40.js checkForm) by reading the DOM
+      // value of input[name=DDDDD] / input[name=upass] and aborting with
+      // 请输入账号！ / 请输入密码！ when either is empty - nothing is sent. So a
+      // click before Chromium's autofill has committed is a guaranteed, and
+      // harmful (counted as a failed attempt), no-op. Wait for the boxes to
+      // carry a value, then click; if this load never fills, skip the click and
+      // fall through to the reload path so the next load gets a fresh chance.
+      const filled = await waitFilled(FILL_GRACE_MS);
+      if (filled) {
+        log("autofill ready -> clicking 登录 (anchor_delay_ms:",
+            Math.max(0, anchorAt - LOAD_START), ")");
+        await clickLogin(btn);
 
-      // 1 s after the click, check whether we are logged in yet.
-      await sleep(CHECK_AT_MS);
-      const loggedIn = await checkLoggedIn();
-      if (loggedIn || !hasPasswordField()) {
-        clearKey(RETRY_KEY);
-        log("logged in (status or page gone) -> done. via",
-            loggedIn ? "status" : "page navigated away");
-        return;
+        // 1 s after the click, check whether we are logged in yet.
+        await sleep(CHECK_AT_MS);
+        const loggedIn = await checkLoggedIn();
+        if (loggedIn || !hasPasswordField()) {
+          clearKey(RETRY_KEY);
+          log("logged in (status or page gone) -> done. via",
+              loggedIn ? "status" : "page navigated away");
+          return;
+        }
+      } else {
+        const { pwd, user } = getCreds();
+        log("autofill not ready after", FILL_GRACE_MS,
+            "ms -> NOT clicking (a blind click here is exactly what produced " +
+            "请输入账号!) | user_set=", !!(user && user.value),
+            "pwd_set=", !!(pwd && pwd.value));
       }
 
-      // Not logged in: refresh and let the loop restart from the top.
+      // Not logged in (either the click did not take, or we deliberately
+      // skipped it because autofill never arrived): refresh and let the loop
+      // restart from the top. A reload is a load that tends to get autofilled.
       const n = getNum(RETRY_KEY) + 1;
       setNum(RETRY_KEY, n);
       if (n <= MAX_RELOAD) {
         if (document.visibilityState !== "visible") {
           // Refreshing a background tab only produces one more hidden load,
           // which can never be filled. Wait until the tab is actually shown.
-          log("not logged in after click, but the tab is in the background ->" +
+          log("no login yet, but the tab is in the background ->" +
               " no refresh (a hidden reload is never autofilled)");
           return;
         }
-        log("not logged in after click -> refresh & retry", n, "/", MAX_RELOAD);
+        log("no login yet -> refresh & retry", n, "/", MAX_RELOAD);
         location.reload();
         return; // ensureLogin re-runs on the reloaded document
       }
       clearKey(RETRY_KEY);
-      log("gave up after", MAX_RELOAD, "refreshes; click 登录 manually if the boxes are filled.");
+      log("gave up after", MAX_RELOAD, "refreshes. If the boxes are filled but " +
+          "it still will not log in, the saved password may be wrong; if they " +
+          "stay empty, Chromium is not autofilling this site at all.");
     } finally {
       running = false;
     }

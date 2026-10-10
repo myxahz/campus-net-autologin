@@ -33,12 +33,15 @@
                → 上报"浏览器里有几枚登录页"到 POST /tabs（看门狗据此不再叠开）
                → 只留最新的一枚登录页，多余的关掉（避免多个刷新回路互相空转）
                → 把登录页所在窗口 + 标签页提到最前
-          content.js 持有"点击 / 刷新重试"回路（用户指定时序）：
-               开页 → 第 3 秒点一次「登录」→ 1 秒后查登录状态
-               → 没登录就刷新 → 刷新后第 3 秒再点一次（最多 MAX_RELOAD 次）
-               ↓ 第 3 秒**无条件**点「登录」（用户要求字面"无脑点击"：
-                 即使点击时刻密码框仍为空也照点；点完 1 秒查状态，没登录就刷新重来）
-               ↓ 但"第 3 秒"从**页面来到前台**那一刻起算；一直待在后台的页面
+          content.js 持有"点击 / 刷新重试"回路：
+               开页 → 等到"页面来到前台"后 +3 秒（最早点击时刻）
+               → 再等浏览器把账号框与密码框都填上 → 点一次「登录」
+               → 1 秒后查登录状态 → 没登录就刷新，回到起点重来（最多 MAX_RELOAD 次）
+               ↓ **填充后才点击**：门户 checkForm() 会读 input[name=DDDDD]，
+                 为空即弹「请输入账号！」并原地返回（一个字节都不发给后端）；
+                 所以空框点击必然失败、还会被记一次失败登录。等满 FILL_GRACE_MS
+                 （5 秒）仍未填充，就只刷新、不点击。
+               ↓ "第 3 秒"从**页面来到前台**那一刻起算；一直待在后台的页面
                  既不点击也不刷新（后台加载从未被填充过），等它被提到前台再走一遍
 ```
 
@@ -49,7 +52,7 @@
 
 **已经确证的：**
 
-- 密码永远只由浏览器自己填，本工具不读也不写密码。第 3 秒**无条件**点「登录」——这是用户明确要求的字面"无脑点击"行为，即使点击时刻密码框仍为空也照点（空密码会被网关记一次失败登录，用户接受这个代价以换取确定的点击时机）。
+- 密码永远只由浏览器自己填，本工具不读也不写密码。**等到账号框与密码框都已被填充后才点「登录」**（2026-10-10 修正：旧版第 3 秒无条件点击，空框一击会被门户 `checkForm()` 判为空账号、弹「请输入账号！」并原地返回——既登录不了，又在网关记一次失败登录）。
 - 一次页面加载要么在 **1–5 秒内被填充，要么这次加载就永远不会填**——是"这一次加载"的性质，不是"再等等就有了"。
 - **在前台重新导航该标签页，确实能产生一次被填充的加载**：两次成功登录（12:52:33、13:09:29）都紧跟一次这样的重载，随后点击一次通过。
 
@@ -164,18 +167,18 @@ campus-net-autologin/
 | 现象 | 排查 |
 |------|------|
 | 插件控制台提示 `watchdog status unavailable` | 看门狗没在跑，双击 `windows\start-watchdog.vbs` 或重启 |
-| 打开登录页但不点「登录」 | 打开日志文件搜 `[plugin] cs:`，看它停在哪一步：`form never appeared` 表示登录表单没渲染出来；`login button NOT FOUND` 表示按钮没被识别（附该按钮的 HTML 提 Issue）；`still in the background after 6000ms -> not clicking` 表示这次加载一直待在后台（切到前台即可）。注意现在是第 3 秒**无条件点击**，不再因"框空"跳过——所以"开了页却死活不点"通常是表单没出现、按钮没认出，或页面还在后台 |
-| 没看到日志里 `clicking 登录 at ~3s (autofill ready: true)` | 浏览器没有自动填充（或填得比 3 秒晚）。先确认浏览器里确实保存了该站点账号密码（手动双击登录页快捷方式能自动填上就说明有），再看开页方式：只有"正常打开"的页面才会被填充，看门狗用 `os.startfile` 打开的正是这种——这正是本项目把开页交给看门狗的原因 |
+| 打开登录页但不点「登录」 | 打开日志文件搜 `[plugin] cs:`，看它停在哪一步：`form never appeared` 表示登录表单没渲染出来；`login button NOT FOUND` 表示按钮没被识别（附该按钮的 HTML 提 Issue）；`still in the background after 6000ms -> not clicking` 表示这次加载一直待在后台（切到前台即可）；`autofill not ready after 5000ms -> NOT clicking` 表示浏览器始终没自动填充，插件选择刷新而不空点——根因是**浏览器没保存该站点密码**，不是插件不点 |
+| 没看到日志里 `autofill ready -> clicking 登录` | 浏览器没有自动填充（或填得太晚）。先确认浏览器里确实保存了该站点账号密码（手动双击登录页快捷方式能自动填上就说明有），再看开页方式：只有"正常打开"的页面才会被填充，看门狗用 `os.startfile` 打开的正是这种——这正是本项目把开页交给看门狗的原因 |
 | 掉线了但浏览器没自动弹出登录页 | 看 `/status` 里的 `auto_open_count` / `last_auto_open` 有没有在涨；再看日志里 `opened login page ...` 或 `auto-open failed`。若用户手动关了 `auto_open_login_page`，看门狗当然不会开页。另外若 `/status` 的 `login_tabs` 是个新鲜的正数，说明浏览器里已经有一枚登录页了，看门狗**故意不再开**（日志记 `auto-open skipped`） |
 | 掉线时反复弹登录页标签 | `login_open_interval_sec` 调大（默认 180 秒；恢复联网会立刻重置）；`login_open_max_per_outage` 调小（默认每次掉线最多开 3 次，到上限后日志记 `auto-open paused`）。插件运行正常时看门狗会自动让路（日志记 `auto-open skipped: the browser already has N login tab(s)`），无需手改配置 |
 | 明明没登录却显示"在线"、于是不点登录 | 这是旧版缺陷：只看网址判定，会被"HTTP 200 + 登录页 HTML"这种不改网址的劫持骗过。请确认用的是当前版本（会嗅探响应内容 + 校验 204 哨兵）。仍能复现，请附日志里 `reason` 那行的原始响应 |
 | 点了「注销」后一直不自动登录 | 先看 `/status`：若 `need_login` 已是 `true`，判定没问题，问题在下游，搜日志里 `[plugin] bg:` 看它有没有 `trigger login` / `focused window` / `sent ENSURE_LOGIN` / `kept it in front (content script owns the refresh/retry loop)`（看门狗那一侧还应有 `opened login page in the default browser`）。若 `need_login` 始终为 `false`，才是判定问题 |
-| 一直看到 `not logged in after click -> refresh & retry n / 6`，最后 `gave up after 6 refreshes` | 每次加载点击后 1 秒仍没登录（无论是否真的填了密码）。看 `clicking 登录 at ~3s (autofill ready: ... | anchor_delay_ms: N)` 那行：`autofill ready: false` 说明点击时刻浏览器仍未自动填充——先确认浏览器为 `login.bjtu.edu.cn` 保存过密码（手动双击登录页快捷方式能自动填上就说明有）；`anchor_delay_ms` 大于 0 说明这次加载先待在后台、被提到前台后才起算 3 秒。最多 6 次刷新后记 `gave up after 6 refreshes`，此时请手动点一次确认 |
+| 一直看到 `no login yet -> refresh & retry n / 6`，最后 `gave up after 6 refreshes` | 每次点击后 1 秒仍没登录。分两种：日志是 `autofill not ready ... -> NOT clicking` 说明浏览器**根本没自动填充**（先确认浏览器为 `login.bjtu.edu.cn` 保存过密码）；是 `autofill ready -> clicking 登录` 却仍失败，说明填了但登录没过（多半密码错误）。`anchor_delay_ms` 大于 0 表示这次加载先待在后台、被提到前台后才起算 3 秒。最多 6 次后记 `gave up after 6 refreshes`，此时请手动点一次确认 |
 | 日志里 `still in the background after 6000ms -> not clicking` | 这次加载一直待在后台标签里，插件故意不点、也不刷新：后台加载从未被观察到最后被填充，点下去只会换来网关的「请输入账号」和一次失败登录记录。把该标签切到前台即可，插件会在你切过去的瞬间重新起算 3 秒并点击 |
 | 日志里 `login tabs found: N - keeping the newest (id ...), closing N-1 stale one(s)` | 浏览器里同时开着多枚登录页，插件只留最新的一枚、关掉其余（多枚并存时每个都在跑自己的刷新回路，而后台加载等不到填充，只会空转刷屏）。属正常清理，无需处理 |
-| 页面弹「请输入账号！」但框里明明有账号 | 这是**过期的提示**：它是点击那一刻表单还空着时网关弹的（`autofill ready: false`），浏览器随后才把账号密码填上，提示框不会自己消失。看一眼日志里同一 `[Lxxxx]` 的那行即可确认先后顺序；真正恢复登录后该提示会被新页面顶掉 |
+| 页面弹「请输入账号！」但框里明明有账号 | 当前版本**不再出现**：这句正是门户 `a40.js` 的 `checkForm()` 在 `input[name=DDDDD]` 为空时弹的，所以插件现已改为"填充后才点"（旧版第 3 秒无条件点击时会撞上）。若在老版本看到它，那是**过期的提示**——点击那一刻框还空着，浏览器随后才填上，提示框不会自己消失 |
 | 日志里出现 `[Lxxxx]` 这样的前缀 | 这是**这一次页面加载**的 id。把同一次加载的所有行串起来看，才能回答"哪一次加载被填充了"——这正是排查自动填充问题唯一有效的方法 |
-| 想一次性拿到完整诊断 | 复现一次后把 `%TEMP%\bjtu-net-autologin.log` 发出来，重点看 `boot | nav=...`、`audit:`、`clicking 登录 at ~3s (autofill ready: ...)`、`not logged in after click -> refresh & retry n / 6` 这几类行 |
+| 想一次性拿到完整诊断 | 复现一次后把 `%TEMP%\bjtu-net-autologin.log` 发出来，重点看 `boot | nav=...`、`audit:`、`autofill ready -> clicking 登录` / `autofill not ready ... -> NOT clicking`、`no login yet -> refresh & retry n / 6` 这几类行 |
 | 判定频繁误报 | 检查 `probe_urls` 是否在本网络下可访问；`poll_interval_sec` 可调大 |
 | 登录页打开了、也点了「登录」，但就是联不上网 | 多半是登录链接里的 `usermac` 选错了网卡（笔记本常有蓝牙 / Wi-Fi Direct / VPN 虚拟网卡）。先看日志里 `mac picked ...` 那行选中的是哪张网卡；用 `getmac /v` 找到你实际上网那张网卡的 MAC，填进 `config.json` 的 `usermac` |
 | 双击启动器后毫无反应 | 多半是启动器被复制出了项目目录，见 [windows/README.md](windows/README.md) 的说明 |
